@@ -1,0 +1,115 @@
+<script>
+const Views = {
+  overview(data) {
+    const k = data.kpis || {};
+    return `
+      <div class="grid kpi-grid">
+        ${kpi('Vendas simuladas', money(k.gmv), k.state)}${kpi('Pedidos', int(k.orders), k.state)}
+        ${kpi('Entregas atrasadas', pct(k.delayRate), stateFromRate(k.delayRate, .10, .18))}
+        ${kpi('Cancelamento', pct(k.cancelRate), stateFromRate(k.cancelRate, .03, .06))}
+        ${kpi('Problemas reportados', int(k.claims), stateFromRate(k.claimRate, .04, .08))}
+        ${kpi('Entrega rápida', pct(k.under48Rate), 'Saudável')}
+      </div>
+      <div class="grid two" style="margin-top:14px">
+        <div class="card"><h3>Evolução das vendas simuladas</h3>${bars(data.trend || [], 'gmv')}</div>
+        <div class="card"><h3>Resumo executivo</h3><p class="muted">${escapeHtml(data.summary || '')}</p>
+          <div class="grid" style="margin-top:14px">${secondary('Valor médio por pedido', money(k.avgTicket))}${secondary('Avaliação média', k.avgReview)}${secondary('Lojas ativas', int(k.activeSellers))}</div>
+        </div>
+      </div>
+      <div class="grid two" style="margin-top:14px">
+        <div class="card"><h3>Participação por categoria</h3>${bars(data.composition || [], 'gmv')}</div>
+        <div class="card"><h3>Sugestões principais</h3>${recommendationList(data.recommendations || [])}</div>
+      </div>`;
+  },
+  explore(data) {
+    const rows = (data.rows || []).slice(0, AppState.pageSize);
+    return `${filters()}
+      ${activeFilters()}${relaxedNotice(data)}
+      <div class="grid two">
+        <div class="card"><h3>Distribuição do resultado</h3>${bars(data.chart || [], 'gmv')}</div>
+        <div class="card"><h3>Resumo da seleção</h3>${selectionSummary(data)}</div>
+      </div>
+      <div class="actions-row" style="margin:14px 0"><button onclick="saveCurrentView()">Salvar análise</button><button class="ghost" onclick="openDrilldown()">Ver causas da seleção</button></div>
+      ${table(rows, ['category','buyer_state','seller_id','gmv','orders','delayRate','claimRate','state'])}`;
+  },
+  recommendations(data) {
+    const rows = data.recommendations || [];
+    if (!rows.length) return empty('Nenhuma sugestão encontrada.', 'Atualize esta tela para recalcular riscos e oportunidades.');
+    return `<div class="grid three">${rows.map(r => `
+      <div class="card">
+        <span class="state ${classState(r.state)}">${escapeHtml(r.state)}</span>
+        <h3 style="margin-top:12px">${escapeHtml(r.title)}</h3>
+        <p class="muted">${escapeHtml(r.reason)}</p>
+        <p>${escapeHtml(r.suggested_action)}</p>
+        <div class="muted">Impacto estimado ${r.impact_score} - Confiança ${pct(r.confidence)}</div>
+        <div class="actions-row" style="margin-top:12px"><button data-rec-id="${r.recommendation_id}" onclick="createFromRec('${r.recommendation_id}', this)">Adicionar ao plano</button><button class="ghost" onclick="saveCurrentView()">Salvar</button></div>
+      </div>`).join('')}</div>`;
+  },
+  alerts(data) {
+    const rows = data.alerts || [];
+    if (!rows.length) return empty('Nenhum ponto de atenção ativo.', 'A simulação não encontrou desvios importantes para os filtros atuais.');
+    return `<div class="grid">${rows.map(a => `
+      <div class="card">
+        <div class="actions-row" style="justify-content:space-between"><span class="state ${classState(a.state)}">${escapeHtml(a.severity)} - ${escapeHtml(a.state)}</span><span class="muted">${escapeHtml(a.status)}</span></div>
+        <h3 style="margin-top:10px">${escapeHtml(a.message)}</h3>
+        <p class="muted">${friendlyColumn(a.metric)} atual ${pct(a.current_value)} - limite ${pct(a.threshold)}</p>
+        <p>${escapeHtml(a.suggested_action)}</p>
+        <div class="actions-row"><button data-alert-id="${a.alert_id}" onclick="createFromAlert('${a.alert_id}', this)">Adicionar ao plano</button><button class="ghost" onclick="markSeen('${a.alert_id}')">Marcar como visto</button></div>
+      </div>`).join('')}</div>`;
+  },
+  saved(data) {
+    const rows = data.favorites || [];
+    if (!rows.length) return empty('Você ainda não salvou análises.', 'Use Salvar análise em Investigar, Entender causas ou Sugestões.');
+    return `<div class="grid three">${rows.map(f => `
+      <div class="card"><h3>${escapeHtml(f.title)}</h3><p class="muted">${friendlyTab(f.tab)} - ${escapeHtml(f.created_at)}</p><p>${escapeHtml(f.description || 'Analise salva para consultar depois.')}</p><div class="actions-row"><button onclick="openSaved('${f.tab}','${encodeURIComponent(f.filters_json || '{}')}')">Abrir</button><button class="ghost" onclick="deleteSaved('${f.favorite_id}')">Remover</button></div></div>`).join('')}</div>`;
+  },
+  actions(data) {
+    const rows = data.actions || [];
+    return `<div class="grid two">
+      <button class="mobile-only" onclick="toggleActionForm()">+ Nova ação</button>
+      <div class="card action-form-panel"><h3>Nova ação</h3>${actionForm()}</div>
+      <div class="card"><h3>Histórico do plano</h3>${rows.length ? actionsTable(rows) : empty('Nenhuma ação registrada.', 'Crie uma ação manual ou adicione uma sugestão ao plano.')}</div>
+    </div>`;
+  },
+  drilldown(data) {
+    return `${activeFilters()}${relaxedNotice(data)}<div class="card"><h3>Entender causas por ${friendlyColumn(data.dimension || 'category')}</h3>${bars(data.rows || [], 'gmv')}<div class="actions-row" style="margin-top:14px"><button onclick="quickAction()">Adicionar ao plano</button><button class="ghost" onclick="saveCurrentView()">Salvar análise</button></div></div>`;
+  },
+  compare(data) {
+    return `${compareControls(data)}
+    <div class="grid compare-grid">
+      ${(data.scenarios || [data.a, data.b]).filter(Boolean).map(s => `<div class="card compare-card"><h3>${escapeHtml(s.label || 'Cenário')}</h3>${compareCard(s.kpis || {})}</div>`).join('')}
+      <div class="card" style="grid-column:1/-1"><h3>Diferença em relação ao primeiro cenário</h3>${compareDeltaTable(data.deltas || [{scenario:(data.b?.label || 'B') + ' vs ' + (data.a?.label || 'A'), delta:data.delta || {}}])}</div>
+    </div>`;
+  }
+};
+
+function kpi(label, value, state){return `<div class="card kpi"><label>${label}</label><strong>${value}</strong><span class="state ${classState(state)}">${state || 'Saudável'}</span></div>`}
+function secondary(label, value){return `<div><span class="muted">${label}</span><strong style="display:block;margin-top:4px">${value}</strong></div>`}
+function filters(){return `<div class="filters" data-filter-bar="true"><select data-filter-key="category"><option value="">Todas as categorias</option>${['Eletronicos','Moda','Casa','Beleza','Esportes','Games','Auto','Ferramentas','Mercado','Brinquedos'].map(x=>`<option ${AppState.filters.category===x?'selected':''}>${x}</option>`).join('')}</select><select data-filter-key="buyer_state"><option value="">Todos os estados</option>${['SP','RJ','MG','PR','RS','BA','PE','CE','GO','SC','AM','PA'].map(x=>`<option ${AppState.filters.buyer_state===x?'selected':''}>${x}</option>`).join('')}</select><select data-filter-key="logistic_type"><option value="">Todos os tipos de entrega</option>${['Full','Flex','Coleta','Drop-off','Cross-docking'].map(x=>`<option ${AppState.filters.logistic_type===x?'selected':''}>${x}</option>`).join('')}</select><select data-filter-key="order_status"><option value="">Todas as situacoes</option>${['delivered','shipped','processing','cancelled','unavailable'].map(x=>`<option value="${x}" ${AppState.filters.order_status===x?'selected':''}>${friendlyValue(x)}</option>`).join('')}</select><input data-filter-key="seller_id" value="${escapeHtml(AppState.filters.seller_id || '')}" placeholder="Loja parceira ex: sel_12"><button class="ghost" onclick="clearFilters()">Limpar filtros</button></div>`}
+function bars(rows, metric){if(!rows.length)return empty('Sem dados para esta análise.','Limpe algum filtro ou escolha outra opção.');const max=Math.max(...rows.map(r=>Number(r[metric]||0)),1);return `<div class="bars">${rows.slice(0,10).map(r=>`<div class="bar"><span>${formatBarLabel(r.label || r.category || r.seller_id || 'N/D')}</span><div class="track"><div class="fill" style="width:${Math.max(2,Number(r[metric]||0)/max*100)}%"></div></div><strong>${metric==='gmv'?money(r[metric]):int(r[metric])}</strong></div>`).join('')}</div>`}
+function table(rows, cols){if(!rows.length)return empty('Nenhum dado encontrado para este filtro.','Tente limpar algum filtro ou escolher outra opção.');return `<div class="table-wrap desktop-table"><table><thead><tr>${cols.map(c=>`<th>${friendlyColumn(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${formatCell(c,r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${mobileCardList(rows, cols)}`}
+function recommendationList(rows){return rows.length?rows.map(r=>`<p><span class="state ${classState(r.state)}">${r.state}</span> ${escapeHtml(r.title)}</p>`).join(''):empty('Sem sugestoes.','Atualize a tela de sugestoes.')}
+function actionForm(){return `<form onsubmit="submitAction(event)"><input name="title" placeholder="Título da ação" required><textarea name="problem_detected" placeholder="O que foi percebido?"></textarea><textarea name="suggested_action" placeholder="O que deve ser feito?"></textarea><select name="priority"><option>Média</option><option>Baixa</option><option>Alta</option><option>Crítica</option></select><input name="owner" placeholder="Responsável"><select name="status"><option>Aberta</option><option>Em análise</option><option>Em andamento</option><option>Concluída</option><option>Arquivada</option></select><textarea name="notes" placeholder="Observação"></textarea><button type="submit">Registrar ação</button></form>`}
+function actionsTable(rows){return `<div class="table-wrap desktop-table"><table><thead><tr><th>Ação</th><th>Prioridade</th><th>Responsável</th><th>Status</th><th>Criado em</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.title)}</td><td>${escapeHtml(r.priority)}</td><td>${escapeHtml(r.owner)}</td><td>${escapeHtml(r.status)}</td><td>${escapeHtml(r.created_at)}</td><td><button class="ghost mini-btn" onclick="deleteAction('${r.action_id}')">Remover</button></td></tr>`).join('')}</tbody></table></div><div class="mobile-card-list">${rows.map(r=>`<div class="mobile-data-card"><h4>${escapeHtml(r.title)}</h4><p><span>Prioridade</span><strong>${escapeHtml(r.priority)}</strong></p><p><span>Responsável</span><strong>${escapeHtml(r.owner)}</strong></p><p><span>Status</span><strong>${escapeHtml(r.status)}</strong></p><button class="ghost mini-btn" onclick="deleteAction('${r.action_id}')">Remover</button></div>`).join('')}</div>`}
+function compareCard(k){return `<div class="grid">${secondary('Vendas simuladas',money(k.gmv))}${secondary('Pedidos',int(k.orders))}${secondary('Entregas atrasadas',pct(k.delayRate))}${secondary('Problemas reportados',pct(k.claimRate))}${secondary('Avaliação',k.avgReview || 0)}</div>`}
+function compareControls(data){const cats=['Eletronicos','Moda','Casa','Beleza','Esportes','Games','Auto','Ferramentas','Mercado','Brinquedos'];const scenarios=(AppState.filters.compareItems&&AppState.filters.compareItems.length?AppState.filters.compareItems:(data.scenarios&&data.scenarios.length?data.scenarios.map(s=>s.label):['Eletronicos','Casa']));return `<div class="filters compare-controls">${scenarios.map((value,index)=>`<div class="compare-select"><select onchange="setCompareIndex(${index},this.value)">${cats.map(x=>`<option ${value===x?'selected':''}>${x}</option>`).join('')}</select>${scenarios.length>2?`<button class="ghost mini-btn" onclick="removeComparison(${index})">Remover</button>`:''}</div>`).join('')}${scenarios.length<4?'<button onclick="addComparison()">Adicionar comparação</button>':''}</div>`}
+function compareDeltaTable(items){if(!items.length)return empty('Escolha pelo menos dois cenários.','Adicione outra comparação para ver a diferença.');return `<div class="table-wrap"><table><thead><tr><th>Cenário</th><th>Vendas simuladas</th><th>Pedidos</th><th>Entregas atrasadas</th><th>Problemas reportados</th><th>Avaliação média</th></tr></thead><tbody>${items.map(item=>`<tr><td>${escapeHtml(item.scenario)}</td><td>${signedPct(item.delta.gmv)}</td><td>${signedPct(item.delta.orders)}</td><td>${signedPct(item.delta.delayRate)}</td><td>${signedPct(item.delta.claimRate)}</td><td>${signedPct(item.delta.avgReview)}</td></tr>`).join('')}</tbody></table></div>`}
+function mobileCardList(rows, cols){return `<div class="mobile-card-list">${rows.map(r=>`<div class="mobile-data-card"><h4>${escapeHtml(r.seller_id || r.category || r.title || 'Registro')}</h4>${cols.filter(c=>c!=='seller_id').map(c=>`<p><span>${friendlyColumn(c)}</span><strong>${formatCell(c,r[c])}</strong></p>`).join('')}</div>`).join('')}</div>`}
+function selectionSummary(data){const rows=data.rows||[];if(!rows.length)return empty('Nenhum resultado com esses filtros.','Limpe algum filtro ou escolha outra categoria.');const total=rows.reduce((s,r)=>s+Number(r.orders||0),0);const value=rows.reduce((s,r)=>s+Number(r.gmv||0),0);return `<div class="grid">${secondary('Grupos encontrados', int(rows.length))}${secondary('Pedidos no filtro', int(total))}${secondary('Vendas simuladas no filtro', money(value))}</div>`}
+function activeFilters(){const labels={category:'Categoria',buyer_state:'Estado',logistic_type:'Entrega',order_status:'Situação',seller_id:'Loja'};const items=Object.keys(AppState.filters||{}).filter(k=>labels[k]&&AppState.filters[k]).map(k=>`${labels[k]}: ${friendlyValue(AppState.filters[k])}`);return `<div class="filter-summary">${items.length?`Filtros ativos: ${items.map(escapeHtml).join(' · ')}`:'Sem filtros ativos. Mostrando a base completa.'}</div>`}
+function relaxedNotice(data){const relaxed=data.relaxed||[];if(!relaxed.length)return '';return `<div class="notice" style="display:block;margin:0 0 14px">Não havia resultado para a combinação exata. Mostrando a análise mais próxima, sem considerar: ${relaxed.map(friendlyColumn).join(', ')}.</div>`}
+function empty(title, hint){return `<div class="empty"><strong>${title}</strong><br><span>${hint}</span></div>`}
+function formatCell(c,v){if(c==='gmv')return money(v);if(String(c).includes('Rate'))return pct(v);if(c==='state')return `<span class="state ${classState(v)}">${escapeHtml(v)}</span>`;return escapeHtml(friendlyValue(v))}
+function friendlyColumn(c){return ({category:'Categoria',buyer_state:'Estado',seller_id:'Loja parceira',gmv:'Vendas simuladas',orders:'Pedidos',delayRate:'Entregas atrasadas',claimRate:'Problemas reportados',state:'Situação',title:'Ação',priority:'Prioridade',owner:'Responsável',status:'Status',created_at:'Criado em',avgReview:'Avaliação média',delay_rate:'Entregas atrasadas',cancel_rate:'Cancelamentos',claim_rate:'Problemas reportados'})[c] || c}
+function friendlyValue(v){return ({delivered:'Entregue',shipped:'Enviado',processing:'Em preparo',cancelled:'Cancelado',unavailable:'Indisponível',overview:'Panorama',explore:'Investigar',drilldown:'Entender causas',compare:'Comparar cenários',alerts:'Pontos de atenção',recommendations:'Sugestões',saved:'Minhas análises',actions:'Plano de ação',Atencao:'Atenção',Saudavel:'Saudável'})[v] || v}
+function friendlyTab(v){return friendlyValue(v)}
+function formatBarLabel(v){const d=new Date(v);if(!isNaN(d.getTime())&&String(v).includes('GMT'))return d.toLocaleDateString('pt-BR',{month:'short',year:'numeric'}).replace('.','');return escapeHtml(v)}
+function classState(s){return String(s||'Saudavel').replace('ç','c').replace('ã','a').replace('á','a').replace('ú','u')}
+function stateFromRate(v,a,r){return Number(v)>r?'Risco':Number(v)>=a?'Atenção':'Saudável'}
+function money(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0})}
+function int(v){return Number(v||0).toLocaleString('pt-BR')}
+function pct(v){return (Number(v||0)*100).toFixed(1)+'%'}
+function signedPct(v){const n=Number(v||0)*100;return (n>0?'+':'') + n.toFixed(1) + '%'}
+function escapeHtml(v){return String(v ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function clearFilters(){AppState.filters={};delete AppState.tabCache[AppState.currentTab];refreshTab()}
+</script>
