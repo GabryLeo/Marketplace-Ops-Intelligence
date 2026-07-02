@@ -1,0 +1,216 @@
+<script>
+const AppState = { user:null, currentTab:'overview', tabCache:{}, lastUpdated:{}, filters:{}, pageSize:35, timer:null, requestId:0 };
+const tabs = [
+  ['overview','Panorama'],['explore','Investigar'],['drilldown','Entender causas'],['compare','Comparar cenários'],
+  ['alerts','Pontos de atenção'],['recommendations','Sugestões'],['saved','Minhas análises'],['actions','Plano de ação']
+];
+const mobileTabs = [['overview','Início'],['explore','Investigar'],['recommendations','Sugestões'],['actions','Ações'],['more','Mais']];
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderNav();
+  document.getElementById('loginForm').addEventListener('submit', onLogin);
+  document.getElementById('refreshBtn').addEventListener('click', refreshTab);
+});
+
+function renderNav(){
+  document.getElementById('nav').innerHTML = tabs.map(([id,label]) => `<button class="nav-btn" data-tab="${id}" onclick="openTab('${id}')">${label}</button>`).join('');
+  document.getElementById('mobileNav').innerHTML = mobileTabs.map(([id,label]) => `<button class="nav-btn" data-tab="${id}" onclick="${id === 'more' ? 'toggleMoreMenu()' : `openTab('${id}')`}">${label}</button>`).join('');
+  document.getElementById('moreMenu').innerHTML = [
+    ['alerts','Pontos de atenção'],
+    ['drilldown','Entender causas'],
+    ['compare','Comparar cenários'],
+    ['saved','Minhas análises']
+  ].map(([id,label]) => `<button onclick="openTab('${id}'); toggleMoreMenu(false)">${label}</button>`).join('');
+}
+
+function onLogin(event){
+  event.preventDefault();
+  const email = document.getElementById('emailInput').value;
+  document.getElementById('login').classList.add('hidden');
+  showLoading(true, 'Validando seu e-mail e abrindo a sessao.', 'login');
+  google.script.run.withSuccessHandler(res => {
+    if(!res.success) return showLoginError(res.error.message);
+    AppState.user = res.data.user;
+    AppState.currentTab = 'overview';
+    AppState.filters = res.data.filters || {};
+    document.getElementById('userEmail').textContent = shortEmail(AppState.user.email);
+    document.getElementById('userEmail').title = AppState.user.email;
+    showLoading(true, 'Buscando indicadores, salvos e recomendacoes.', 'data');
+    google.script.run.withSuccessHandler(payload => {
+      showLoading(true, 'Quase pronto. Montando a primeira tela.', 'ready');
+      document.getElementById('app').classList.remove('hidden');
+      if(payload.success){
+        AppState.tabCache.overview = payload.data.overview;
+        AppState.tabCache.saved = payload.data.favorites;
+      }
+      openTab('overview');
+      setTimeout(()=>showLoading(false), 220);
+    }).withFailureHandler(err => showLoginError(err.message)).getInitialPayload(AppState.user.email);
+  }).withFailureHandler(err => showLoginError(err.message)).login(email);
+}
+
+function openTab(tab){
+  toggleMoreMenu(false);
+  AppState.currentTab = tab;
+  document.getElementById('pageTitle').textContent = (tabs.find(t=>t[0]===tab)||[])[1] || tab;
+  document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+  google.script.run.updateSessionState(AppState.user?.email || '', tab, AppState.filters);
+  if(AppState.tabCache[tab]) return renderTab(tab, AppState.tabCache[tab]);
+  refreshTab();
+}
+
+function refreshTab(){
+  return loadTab(false);
+}
+
+function loadTab(soft){
+  const tab = AppState.currentTab;
+  const requestId = ++AppState.requestId;
+  if(soft) softLoading(true); else localLoading(tab);
+  google.script.run.withSuccessHandler(res => {
+    if(requestId !== AppState.requestId) return;
+    softLoading(false);
+    if(!res.success) return showNotice(res.error.message);
+    AppState.tabCache[tab] = res.data;
+    AppState.lastUpdated[tab] = res.data.updatedAt;
+    renderTab(tab, res.data);
+  }).withFailureHandler(err => {
+    if(requestId !== AppState.requestId) return;
+    softLoading(false);
+    showNotice('Nao foi possivel atualizar esta tela agora. Os ultimos dados continuam visiveis.');
+  }).getTabData(tab, AppState.filters, AppState.user?.email || '');
+}
+
+function renderTab(tab, data){
+  const renderer = Views[tab] || Views.overview;
+  document.getElementById('content').innerHTML = renderer(data || {});
+  bindRenderedControls();
+}
+
+function bindRenderedControls(){
+  document.querySelectorAll('[data-filter-key]').forEach(el => {
+    if(el.dataset.bound === 'true') return;
+    el.dataset.bound = 'true';
+    const eventName = el.tagName === 'INPUT' ? 'input' : 'change';
+    el.addEventListener(eventName, () => {
+      if(el.tagName === 'INPUT') debouncedFilter(el.dataset.filterKey, el.value);
+      else setFilter(el.dataset.filterKey, el.value);
+    });
+  });
+}
+
+function toggleMoreMenu(force){
+  const menu = document.getElementById('moreMenu');
+  if(!menu) return;
+  const show = typeof force === 'boolean' ? force : menu.classList.contains('hidden');
+  menu.classList.toggle('hidden', !show);
+  document.querySelectorAll('.mobile-nav .nav-btn').forEach(btn => btn.classList.toggle('active', show && btn.dataset.tab === 'more'));
+}
+
+function shortEmail(email){
+  email = String(email || '');
+  if(email.length <= 18) return email;
+  const parts = email.split('@');
+  return (parts[0] || '').slice(0, 9) + '...@' + (parts[1] || '').slice(0, 8);
+}
+
+function setFilter(key,value){
+  if(value) AppState.filters[key]=value; else delete AppState.filters[key];
+  delete AppState.tabCache[AppState.currentTab];
+  clearTimeout(AppState.timer);
+  softLoading(true);
+  AppState.timer = setTimeout(()=>loadTab(true), 520);
+}
+function debouncedFilter(key,value){
+  clearTimeout(AppState.timer);
+  AppState.timer=setTimeout(()=>setFilter(key,value),420);
+}
+function openDrilldown(){ AppState.filters.dimension = 'category'; openTab('drilldown'); }
+
+function saveCurrentView(){
+  const title = prompt('Nome para salvar esta análise:', document.getElementById('pageTitle').textContent + ' - ' + new Date().toLocaleDateString('pt-BR'));
+  if(!title) return;
+  google.script.run.withSuccessHandler(res => {
+    showNotice(res.success ? 'Analise salva.' : res.error.message);
+    delete AppState.tabCache.saved;
+  }).saveFavorite(AppState.user.email, { title, tab: AppState.currentTab, description:'Filtros e contexto preservados para consultar depois.', filters: AppState.filters });
+}
+
+function deleteSaved(id){
+  google.script.run.withSuccessHandler(()=>{ delete AppState.tabCache.saved; refreshTab(); }).deleteFavorite(AppState.user.email, id);
+}
+
+function openSaved(tab, encoded){
+  AppState.filters = JSON.parse(decodeURIComponent(encoded || '%7B%7D') || '{}');
+  openTab(tab || 'overview');
+}
+
+function submitAction(event){
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target).entries());
+  google.script.run.withSuccessHandler(res => {
+    showNotice(res.success ? 'Acao registrada no plano.' : res.error.message);
+    event.target.reset();
+    delete AppState.tabCache.actions;
+    refreshTab();
+  }).createAction(AppState.user.email, data);
+}
+
+function createFromRec(id){
+  const btn = arguments[1];
+  if(btn){ btn.disabled = true; btn.textContent = 'Adicionando...'; }
+  google.script.run.withSuccessHandler(res => {
+    if(btn){ btn.disabled = false; btn.textContent = res.success ? 'Adicionado' : 'Adicionar ao plano'; }
+    if(res.success) {
+      delete AppState.tabCache.actions;
+      showNotice(res.data && res.data.duplicate ? 'Essa ação já estava no Plano de ação.' : 'Sugestão adicionada ao Plano de ação.');
+    } else showNotice(res.error.message);
+  }).convertRecommendationToAction(AppState.user.email, id);
+}
+function createFromAlert(id){
+  const btn = arguments[1];
+  if(btn){ btn.disabled = true; btn.textContent = 'Adicionando...'; }
+  google.script.run.withSuccessHandler(res => {
+    if(btn){ btn.disabled = false; btn.textContent = res.success ? 'Adicionado' : 'Adicionar ao plano'; }
+    if(res.success) {
+      delete AppState.tabCache.actions;
+      showNotice(res.data && res.data.duplicate ? 'Essa ação já estava no Plano de ação.' : 'Ponto de atenção adicionado ao Plano de ação.');
+    } else showNotice(res.error.message);
+  }).convertAlertToAction(AppState.user.email, id);
+}
+function markSeen(id){
+  google.script.run.withSuccessHandler(()=>{ delete AppState.tabCache.alerts; refreshTab(); }).markAlertSeen(AppState.user.email, id);
+}
+function quickAction(){
+  google.script.run.withSuccessHandler(res => showNotice(res.success ? 'Acao criada.' : res.error.message)).createAction(AppState.user.email,{title:'Investigar causa do resultado',problem_detected:'Analise selecionada pelo usuario.',suggested_action:'Revisar os fatores com maior impacto.',priority:'Media'});
+}
+
+function showLoading(on, message, step){
+  document.getElementById('loading').classList.toggle('hidden', !on);
+  if(message) document.getElementById('loadingText').textContent = message;
+  if(step){
+    ['stepLogin','stepData','stepReady'].forEach(id => document.getElementById(id).classList.remove('active','done'));
+    if(step === 'login') document.getElementById('stepLogin').classList.add('active');
+    if(step === 'data') { document.getElementById('stepLogin').classList.add('done'); document.getElementById('stepData').classList.add('active'); }
+    if(step === 'ready') { document.getElementById('stepLogin').classList.add('done'); document.getElementById('stepData').classList.add('done'); document.getElementById('stepReady').classList.add('active'); }
+  }
+}
+function localLoading(tab){ const label = (tabs.find(t=>t[0]===tab)||[])[1] || 'tela'; document.getElementById('content').innerHTML = `<div class="screen-loading"><div class="loader mini"></div><span>Carregando ${label.toLowerCase()}...</span></div>`; }
+function softLoading(on){ document.getElementById('content').classList.toggle('is-updating', !!on); }
+function showError(msg){ showLoading(false); alert(msg); }
+function showLoginError(msg){ showLoading(false); document.getElementById('login').classList.remove('hidden'); alert(msg); }
+function showNotice(msg){ const n=document.getElementById('notice'); n.textContent=msg; n.classList.remove('hidden'); setTimeout(()=>n.classList.add('hidden'),4200); }
+function setCompareIndex(index,value){ AppState.filters.compareItems = AppState.filters.compareItems || ['Eletronicos','Casa']; AppState.filters.compareItems[index] = value; delete AppState.tabCache.compare; softLoading(true); clearTimeout(AppState.timer); AppState.timer=setTimeout(()=>loadTab(true),420); }
+function addComparison(){ AppState.filters.compareItems = AppState.filters.compareItems || ['Eletronicos','Casa']; const all=['Eletronicos','Moda','Casa','Beleza','Esportes','Games','Auto','Ferramentas','Mercado','Brinquedos']; const next=all.find(x=>!AppState.filters.compareItems.includes(x)) || all[0]; AppState.filters.compareItems.push(next); renderTab('compare', { scenarios: AppState.filters.compareItems.map(label => ({ label, kpis:{} })), deltas: [] }); delete AppState.tabCache.compare; loadTab(true); }
+function removeComparison(index){ AppState.filters.compareItems = (AppState.filters.compareItems || ['Eletronicos','Casa']).filter((_,i)=>i!==index); if(AppState.filters.compareItems.length<2) AppState.filters.compareItems.push('Casa'); renderTab('compare', { scenarios: AppState.filters.compareItems.map(label => ({ label, kpis:{} })), deltas: [] }); delete AppState.tabCache.compare; loadTab(true); }
+function deleteAction(id){
+  if(!confirm('Tem certeza que deseja remover esta ação do plano?')) return;
+  google.script.run.withSuccessHandler(res => {
+    if(res.success){ delete AppState.tabCache.actions; refreshTab(); showNotice('Acao removida do plano.'); }
+    else showNotice(res.error.message);
+  }).deleteAction(AppState.user.email, id);
+}
+function toggleActionForm(){
+  document.querySelector('.action-form-panel')?.classList.toggle('open');
+}
+</script>
