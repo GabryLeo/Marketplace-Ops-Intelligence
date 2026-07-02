@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <div id="login" class="login">
+      <div class="login-panel">
+        <div class="brand-mark">MOI</div>
+        <h1>Marketplace Ops Intelligence</h1>
+        <p>Painel interativo com dados simulados para entender vendas, entregas, problemas e oportunidades de um marketplace.</p>
+        <p class="login-note">Acesso demonstrativo. O e-mail serve apenas para identificar suas análises, salvos e plano de ação.</p>
+        <form id="loginForm">
+          <input id="emailInput" type="email" placeholder="seu.email@empresa.com" required>
+          <button type="submit">Entrar</button>
+        </form>
+        <small><?= appReady ? disclaimer : 'Rode setupApp() na planilha antes de usar.' ?></small>
+      </div>
+    </div>
+
+    <div id="loading" class="loading hidden">
+      <div class="loading-card">
+        <div class="brand-mark">MOI</div>
+        <div class="loader"></div>
+        <h2>Preparando seu panorama</h2>
+        <p id="loadingText">Validando acesso e recuperando suas análises.</p>
+        <div class="progress-track"><div class="progress-fill"></div></div>
+        <div class="loading-steps">
+          <span id="stepLogin" class="active">Entrando</span>
+          <span id="stepData">Carregando dados</span>
+          <span id="stepReady">Montando tela</span>
+        </div>
+        <small><?= disclaimer ?></small>
+      </div>
+    </div>
+
+    <div id="app" class="app hidden">
+      <aside class="sidebar">
+        <div class="logo-row"><span class="brand-mark small">MOI</span><strong>Ops Intelligence</strong></div>
+        <nav id="nav"></nav>
+        <div class="sidebar-foot"><?= disclaimer ?></div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Marketplace com dados simulados</span>
+            <h2 id="pageTitle">Panorama</h2>
+          </div>
+          <div class="top-actions">
+            <span id="userEmail"></span>
+            <button id="refreshBtn" class="ghost">Atualizar dados</button>
+          </div>
+        </header>
+        <section id="notice" class="notice hidden"></section>
+        <section id="content" class="content"></section>
+      </main>
+      <nav id="mobileNav" class="mobile-nav"></nav>
+      <div id="moreMenu" class="more-menu hidden"></div>
+    </div>
+
+    <?!= include('Views'); ?>
+    <?!= include('App'); ?>
+  </body>
+</html>
